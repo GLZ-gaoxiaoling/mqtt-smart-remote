@@ -89,9 +89,14 @@ class MqttService extends ChangeNotifier {
     }
 
     try {
+      disconnect();
+
       _client = MqttServerClient(config.broker, config.clientId);
       _client!.port = config.port;
+      _client!.keepAlivePeriod = 20;
       _client!.logging(on: false);
+      _client!.autoReconnect = true;
+      _client!.resubscribeOnAutoReconnect = true;
       _client!.onConnected = _onConnected;
       _client!.onDisconnected = _onDisconnected;
       _client!.onSubscribed = _onSubscribed;
@@ -99,9 +104,25 @@ class MqttService extends ChangeNotifier {
       connectionStatus = "正在连接...";
       notifyListeners();
 
-      await _client!.connect();
+      final result = await _client!
+          .connect()
+          .timeout(const Duration(seconds: 10), onTimeout: () => null);
 
-      _client!.subscribe(config.topic, mqtt.MqttQos.atMostOnce);
+      if (result == null) {
+        connectionStatus = "连接超时";
+        _addMessage(MqttMessage(
+          topic: "系统",
+          payload: "连接超时，请检查 Broker 地址和端口",
+          timestamp: DateTime.now(),
+          isOutgoing: false,
+        ));
+        notifyListeners();
+        return;
+      }
+
+      if (config.topic.isNotEmpty) {
+        _client!.subscribe(config.topic, mqtt.MqttQos.atMostOnce);
+      }
 
       _client!.updates!.listen(
           (List<mqtt.MqttReceivedMessage<mqtt.MqttMessage>> c) {
@@ -129,12 +150,14 @@ class MqttService extends ChangeNotifier {
         }
       });
     } catch (e) {
+      connectionStatus = "连接失败";
       _addMessage(MqttMessage(
         topic: "系统",
         payload: "连接失败: $e",
         timestamp: DateTime.now(),
         isOutgoing: false,
       ));
+      notifyListeners();
     }
   }
 
@@ -895,7 +918,7 @@ class _SettingsPageState extends State<SettingsPage> {
             _buildField(
               controller: _topicController,
               label: "Topic 主题",
-              hint: "例如 ftEkdAaIc009",
+              hint: "例如 light002",
               icon: Icons.topic_outlined,
             ),
             const SizedBox(height: 32),
